@@ -159,7 +159,6 @@ void CEgon::PrimaryAttack()
 
 			m_shakeTime = 0;
 
-			m_pPlayer->m_iWeaponVolume = EGON_PRIMARY_VOLUME;
 			m_flTimeWeaponIdle = UTIL_WeaponTimeBase() + 0.1;
 			pev->fuser1 = UTIL_WeaponTimeBase() + 2;
 
@@ -171,7 +170,6 @@ void CEgon::PrimaryAttack()
 		case FIRE_CHARGE:
 		{
 			Fire(vecSrc, vecAiming);
-			m_pPlayer->m_iWeaponVolume = EGON_PRIMARY_VOLUME;
 
 			if (pev->fuser1 <= UTIL_WeaponTimeBase())
 			{
