@@ -138,85 +138,55 @@ void CEgon::UseAmmo(int count)
 		m_pPlayer->m_rgAmmo[m_iPrimaryAmmoType] = 0;
 }
 
-void CEgon::Attack()
+void CEgon::PrimaryAttack()
 {
-	// don't fire underwater
-	if (m_pPlayer->pev->waterlevel == 3)
-	{
-
-		if (m_fireState != FIRE_OFF || m_pBeam)
-		{
-			EndAttack();
-		}
-		else
-		{
-			PlayEmptySound();
-		}
-		return;
-	}
+	m_fireMode = FIRE_WIDE;
 
 	UTIL_MakeVectors(m_pPlayer->pev->v_angle + m_pPlayer->pev->punchangle);
 	Vector vecAiming = gpGlobals->v_forward;
 	Vector vecSrc = m_pPlayer->GetGunPosition();
 
 	int flags;
-#if defined(CLIENT_WEAPONS)
 	flags = FEV_NOTHOST;
-#else
-	flags = 0;
-#endif
 
 	switch (m_fireState)
 	{
-	case FIRE_OFF:
-	{
-		if (!HasAmmo())
+		case FIRE_OFF:
 		{
-			m_flNextPrimaryAttack = m_flNextSecondaryAttack = UTIL_WeaponTimeBase() + 0.25;
-			PlayEmptySound();
-			return;
+			m_flAmmoUseTime = gpGlobals->time; // start using ammo ASAP.
+
+			PLAYBACK_EVENT_FULL(flags, m_pPlayer->edict(), m_usEgonFire, 0.0, g_vecZero, g_vecZero, 0.0, 0.0, 0, m_fireMode, 1, 0);
+
+			m_shakeTime = 0;
+
+			m_pPlayer->m_iWeaponVolume = EGON_PRIMARY_VOLUME;
+			m_flTimeWeaponIdle = UTIL_WeaponTimeBase() + 0.1;
+			pev->fuser1 = UTIL_WeaponTimeBase() + 2;
+
+			pev->dmgtime = gpGlobals->time + GetPulseInterval();
+			m_fireState = FIRE_CHARGE;
 		}
+		break;
 
-		m_flAmmoUseTime = gpGlobals->time; // start using ammo ASAP.
-
-		PLAYBACK_EVENT_FULL(flags, m_pPlayer->edict(), m_usEgonFire, 0.0, g_vecZero, g_vecZero, 0.0, 0.0, 0, m_fireMode, 1, 0);
-
-		m_shakeTime = 0;
-
-		m_pPlayer->m_iWeaponVolume = EGON_PRIMARY_VOLUME;
-		m_flTimeWeaponIdle = UTIL_WeaponTimeBase() + 0.1;
-		pev->fuser1 = UTIL_WeaponTimeBase() + 2;
-
-		pev->dmgtime = gpGlobals->time + GetPulseInterval();
-		m_fireState = FIRE_CHARGE;
-	}
-	break;
-
-	case FIRE_CHARGE:
-	{
-		Fire(vecSrc, vecAiming);
-		m_pPlayer->m_iWeaponVolume = EGON_PRIMARY_VOLUME;
-
-		if (pev->fuser1 <= UTIL_WeaponTimeBase())
+		case FIRE_CHARGE:
 		{
-			PLAYBACK_EVENT_FULL(flags, m_pPlayer->edict(), m_usEgonFire, 0, g_vecZero, g_vecZero, 0.0, 0.0, 0, m_fireMode, 0, 0);
-			pev->fuser1 = 1000;
-		}
+			Fire(vecSrc, vecAiming);
+			m_pPlayer->m_iWeaponVolume = EGON_PRIMARY_VOLUME;
 
-		if (!HasAmmo())
-		{
-			EndAttack();
-			m_flNextPrimaryAttack = m_flNextSecondaryAttack = UTIL_WeaponTimeBase() + 1.0;
-		}
-	}
-	break;
-	}
-}
+			if (pev->fuser1 <= UTIL_WeaponTimeBase())
+			{
+				PLAYBACK_EVENT_FULL(flags, m_pPlayer->edict(), m_usEgonFire, 0, g_vecZero, g_vecZero, 0.0, 0.0, 0, m_fireMode, 0, 0);
+				pev->fuser1 = 1000;
+			}
 
-void CEgon::PrimaryAttack()
-{
-	m_fireMode = FIRE_WIDE;
-	Attack();
+			if (!HasAmmo())
+			{
+				EndAttack();
+				m_flNextPrimaryAttack = m_flNextSecondaryAttack = UTIL_WeaponTimeBase() + 1.0;
+			}
+		}
+		break;
+	}
 }
 
 void CEgon::Fire(const Vector& vecOrigSrc, const Vector& vecDir)
@@ -228,12 +198,9 @@ void CEgon::Fire(const Vector& vecOrigSrc, const Vector& vecDir)
 	pentIgnore = m_pPlayer->edict();
 	Vector tmpSrc = vecOrigSrc + gpGlobals->v_up * -8 + gpGlobals->v_right * 3;
 
-	// ALERT( at_console, "." );
+
 
 	UTIL_TraceLine(vecOrigSrc, vecDest, dont_ignore_monsters, pentIgnore, &tr);
-
-	if (0 != tr.fAllSolid)
-		return;
 
 #ifndef CLIENT_DLL
 	CBaseEntity* pEntity = CBaseEntity::Instance(tr.pHit);
@@ -258,97 +225,55 @@ void CEgon::Fire(const Vector& vecOrigSrc, const Vector& vecDir)
 
 	float timedist;
 
-	switch (m_fireMode)
+#ifndef CLIENT_DLL
+	if (pev->dmgtime < gpGlobals->time)
 	{
-	default:
-	case FIRE_NARROW:
-#ifndef CLIENT_DLL
-		if (pev->dmgtime < gpGlobals->time)
+		// wide mode does damage to the ent, and radius damage
+		ClearMultiDamage();
+		if (0 != pEntity->pev->takedamage)
 		{
-			// Narrow mode only does damage to the entity it hits
-			ClearMultiDamage();
-			if (0 != pEntity->pev->takedamage)
-			{
-				pEntity->TraceAttack(m_pPlayer->pev, gSkillData.plrDmgEgonNarrow, vecDir, &tr, DMG_ENERGYBEAM);
-			}
-			ApplyMultiDamage(m_pPlayer->pev, m_pPlayer->pev);
-
-			if (g_pGameRules->IsMultiplayer())
-			{
-				// multiplayer uses 1 ammo every 1/10th second
-				if (gpGlobals->time >= m_flAmmoUseTime)
-				{
-					UseAmmo(1);
-					m_flAmmoUseTime = gpGlobals->time + 0.1;
-				}
-			}
-			else
-			{
-				// single player, use 3 ammo/second
-				if (gpGlobals->time >= m_flAmmoUseTime)
-				{
-					UseAmmo(1);
-					m_flAmmoUseTime = gpGlobals->time + 0.166;
-				}
-			}
-
-			pev->dmgtime = gpGlobals->time + GetPulseInterval();
+			pEntity->TraceAttack(m_pPlayer->pev, gSkillData.plrDmgEgonWide, vecDir, &tr, DMG_ENERGYBEAM | DMG_ALWAYSGIB);
 		}
-#endif
-		timedist = (pev->dmgtime - gpGlobals->time) / GetPulseInterval();
-		break;
+		ApplyMultiDamage(m_pPlayer->pev, m_pPlayer->pev);
 
-	case FIRE_WIDE:
-#ifndef CLIENT_DLL
-		if (pev->dmgtime < gpGlobals->time)
+		if (g_pGameRules->IsMultiplayer())
 		{
-			// wide mode does damage to the ent, and radius damage
-			ClearMultiDamage();
-			if (0 != pEntity->pev->takedamage)
-			{
-				pEntity->TraceAttack(m_pPlayer->pev, gSkillData.plrDmgEgonWide, vecDir, &tr, DMG_ENERGYBEAM | DMG_ALWAYSGIB);
-			}
-			ApplyMultiDamage(m_pPlayer->pev, m_pPlayer->pev);
+			// radius damage a little more potent in multiplayer.
+			::RadiusDamage(tr.vecEndPos, pev, m_pPlayer->pev, gSkillData.plrDmgEgonWide / 4, 128, CLASS_NONE, DMG_ENERGYBEAM | DMG_BLAST | DMG_ALWAYSGIB);
+		}
 
-			if (g_pGameRules->IsMultiplayer())
-			{
-				// radius damage a little more potent in multiplayer.
-				::RadiusDamage(tr.vecEndPos, pev, m_pPlayer->pev, gSkillData.plrDmgEgonWide / 4, 128, CLASS_NONE, DMG_ENERGYBEAM | DMG_BLAST | DMG_ALWAYSGIB);
-			}
+		if (!m_pPlayer->IsAlive())
+			return;
 
-			if (!m_pPlayer->IsAlive())
-				return;
-
-			if (g_pGameRules->IsMultiplayer())
+		if (g_pGameRules->IsMultiplayer())
+		{
+			//multiplayer uses 5 ammo/second
+			if (gpGlobals->time >= m_flAmmoUseTime)
 			{
-				//multiplayer uses 5 ammo/second
-				if (gpGlobals->time >= m_flAmmoUseTime)
-				{
-					UseAmmo(1);
-					m_flAmmoUseTime = gpGlobals->time + 0.2;
-				}
-			}
-			else
-			{
-				// Wide mode uses 10 charges per second in single player
-				if (gpGlobals->time >= m_flAmmoUseTime)
-				{
-					UseAmmo(1);
-					m_flAmmoUseTime = gpGlobals->time + 0.1;
-				}
-			}
-
-			pev->dmgtime = gpGlobals->time + GetDischargeInterval();
-			if (m_shakeTime < gpGlobals->time)
-			{
-				UTIL_ScreenShake(tr.vecEndPos, 5.0, 150.0, 0.75, 250.0);
-				m_shakeTime = gpGlobals->time + 1.5;
+				UseAmmo(1);
+				m_flAmmoUseTime = gpGlobals->time + 0.2;
 			}
 		}
-#endif
-		timedist = (pev->dmgtime - gpGlobals->time) / GetDischargeInterval();
-		break;
+		else
+		{
+			// Wide mode uses 10 charges per second in single player
+			if (gpGlobals->time >= m_flAmmoUseTime)
+			{
+				UseAmmo(1);
+				m_flAmmoUseTime = gpGlobals->time + 0.1;
+			}
+		}
+
+		pev->dmgtime = gpGlobals->time + GetDischargeInterval();
+		if (m_shakeTime < gpGlobals->time)
+		{
+			UTIL_ScreenShake(tr.vecEndPos, 5.0, 150.0, 0.75, 250.0);
+			m_shakeTime = gpGlobals->time + 1.5;
+		}
 	}
+#endif
+
+	timedist = (pev->dmgtime - gpGlobals->time) / GetDischargeInterval();
 
 	if (timedist < 0)
 		timedist = 0;
